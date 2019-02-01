@@ -9,6 +9,8 @@ import com.fr.sciforma.beans.Connector;
 import com.fr.sciforma.exeception.TechnicalException;
 import com.fr.sciforma.manager.ProjectManager;
 import com.sciforma.psnext.api.Global;
+import com.sciforma.psnext.api.InternalFailure;
+import com.sciforma.psnext.api.LockException;
 import com.sciforma.psnext.api.PSException;
 import com.sciforma.psnext.api.Project;
 import com.sciforma.psnext.api.Session;
@@ -30,7 +32,6 @@ import org.springframework.context.support.FileSystemXmlApplicationContext;
  */
 public class Run {
 
-
     public static ApplicationContext ctx;
 
     private static String IP;
@@ -47,12 +48,11 @@ public class Run {
     private static SimpleDateFormat sdf;
 
     private static final String PROGRAM = "ApplyTime";
-    private static final String NUMBER = "1.1";
+    private static final String NUMBER = "1.2";
 
     public static void main(String[] args) {
         Logger.info("[main][" + PROGRAM + "][V" + NUMBER + "] Demarrage de l'API: " + new Date());
-        if(args.length == 1)
-        {
+        if (args.length == 1) {
             try {
                 initialisation();
                 connexion(args[0]);
@@ -63,14 +63,14 @@ public class Run {
             } catch (PSException ex) {
                 Logger.error(ex);
             }
-        }else{
+        } else {
             Logger.error("Erreur dans les arguments de jar");
         }
         System.exit(0);
     }
 
     private static void initialisation() {
-        
+
         //ctx = new FileSystemXmlApplicationContext(System.getProperty("user.dir") + System.getProperty("file.separator") + "config" + System.getProperty("file.separator") + "applicationContext.xml");
         //Logger.info("[initialisation][" + path + "] " + new Date());
         //ctx = new FileSystemXmlApplicationContext(path);
@@ -93,12 +93,12 @@ public class Run {
             in = new FileInputStream(path);
             properties.load(in);
             in.close();
-            
+
             USER = properties.getProperty("sciforma.user");
             PWD = properties.getProperty("sciforma.pwd");
             IP = properties.getProperty("sciforma.ip");
             CONTEXTE = properties.getProperty("sciforma.ctx");
-            
+
             Logger.info("Initialisation de la Session:" + new Date());
             String url = IP + "/" + CONTEXTE;
             mSession = new Session(url);
@@ -107,17 +107,17 @@ public class Run {
         } catch (PSException ex) {
             Logger.error("Erreur dans la connection de ... " + CONTEXTE, ex);
             System.exit(-1);
-        } catch(FileNotFoundException ex){
+        } catch (FileNotFoundException ex) {
             Logger.error("Erreur dans la connection de ... " + CONTEXTE, ex);
             System.exit(-1);
-        }catch(IOException ex){
+        } catch (IOException ex) {
             Logger.error("Erreur dans la connection de ... " + CONTEXTE, ex);
             System.exit(-1);
-        }catch(NullPointerException ex){
+        } catch (NullPointerException ex) {
             Logger.error("Erreur dans la connection de ... " + CONTEXTE, ex);
             System.exit(-1);
         }
-        
+
     }
 
     private static void chargementConfiguration() {
@@ -149,19 +149,25 @@ public class Run {
             Iterator lpit = lp.iterator();
             while (lpit.hasNext()) {
                 p = (Project) lpit.next();
-               
+
                 Logger.info("=======================================================================================");
                 Logger.info("Traitement du projet [" + (lp.indexOf(p) + 1) + "/" + nbProjet + "] " + p.getStringField("Name"));
-                Logger.info("=======================================================================================");
+                //Logger.info("=======================================================================================");
                 try {
                     p.open(false);
                     if (p.getBooleanField("AUT_application")) {
-                        if (start.compareTo(p.getDateField("Start")) > 0) {
-                            p.applyTimesheets(start, finish, true, true, false);
-                            Logger.info("Application des temps sur le projet " + p.getStringField("Name"));
+                        if (start.before(p.getDateField("Finish")) && finish.after(p.getDateField("Start"))) {
+                            if (start.after(p.getDateField("Start")) || start.before(p.getDateField("Finish"))) {
+                                p.applyTimesheets(start, finish, true, true, false);
+                                Logger.info("Application des temps sur le projet " + p.getStringField("Name"));
+                            } else {
+                                Logger.warn("WA.02 Aucune application des temps sur le projet " + p.getStringField("Name") + " => Problème de date");
+                            }
                         } else {
-                            Logger.warn("INVALID ! " + p.getStringField("Name") + " <" + sdf.format(p.getDateField("Start")) + "> et <" + sdf.format(start) + ">");
+                            Logger.warn("WA.02 Aucune application des temps sur le projet " + p.getStringField("Name") + " => Problème de date");
                         }
+                    } else {
+                        Logger.warn("WA.01 Aucune application des temps sur le projet " + p.getStringField("Name") + " => Ne réponds pas au critère AUT_application");
                     }
                     p.save();
                     try {
@@ -172,8 +178,19 @@ public class Run {
                     }
                     p.close();
                 } catch (PSException ex) {
-                    String message = "ER.02 Le projet est verrouillé";
-                    Logger.error(message, ex);
+                    if (ex instanceof LockException) {
+                        LockException lex = (LockException) ex;
+                        Logger.error("ER.02 Le projet est verrouillé par " + lex.getLockingUser());
+                    } else {
+                        if (ex instanceof InternalFailure) {
+                            InternalFailure iex = (InternalFailure) ex;
+                            String[] tokens = iex.getLocalizedMessage().split("SaveException:");
+                            String[] response = tokens[1].split(" at");
+                            Logger.error("ER.03 " + response[0]);
+                        } else {
+                            Logger.error(ex);
+                        }
+                    }
                 }
             }
         } catch (PSException ex) {
